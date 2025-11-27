@@ -1,0 +1,125 @@
+name: Backend CI/CD
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'todo-list/backend/**'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'todo-list/backend/**'
+
+env:
+  DOCKER_REGISTRY: docker.io
+  DOCKER_IMAGE: captainyun/k8s-labs-todo-backend
+  GITOPS_REPO: captain-yun7/2025-11-todolist-cicd-gitops
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: todo-list/backend
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build with Gradle
+        run: ./gradlew build -x test
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-jar
+          path: todo-list/backend/build/libs/*.jar
+          retention-days: 1
+
+  docker-build-push:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-jar
+          path: todo-list/backend/build/libs
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Generate Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: todo-list/backend
+          file: todo-list/backend/Dockerfile.prod
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  update-gitops-repo:
+    needs: docker-build-push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout GitOps repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ secrets.GITOPS_TOKEN }}
+          path: gitops
+
+      - name: Update backend image tag in values.yaml
+        run: |
+          cd gitops
+          NEW_TAG="${{ needs.docker-build-push.outputs.image_tag }}"
+          echo "Updating backend image tag to: $NEW_TAG"
+          # backend 섹션의 tag만 업데이트 (13번째 줄)
+          sed -i '13s|tag: ".*"|tag: "'"${NEW_TAG}"'"|' apps/todo-list/values.yaml
+
+      - name: Commit and push changes
+        run: |
+          cd gitops
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add .
+          git diff --staged --quiet || git commit -m "chore: update backend image tag to ${{ needs.docker-build-push.outputs.image_tag }}"
+          git push
