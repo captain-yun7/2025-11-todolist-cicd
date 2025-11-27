@@ -26,7 +26,7 @@ public class TodoService {
     public TodoResponse convertToResponse(Todo todo) {
         TodoResponse response = new TodoResponse();
         response.setId(todo.getId());
-        response.setTitle(todo.getTitle());
+        response.setTitle(todo.getTitle() + '1');
         response.setDescription(todo.getDescription());
         response.setCompleted(todo.isCompleted());
 
