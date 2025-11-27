@@ -53,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     outputs:
-      image_tag: ${{ steps.meta.outputs.version }}
+      image_tag: ${{ steps.image_tag.outputs.tag }}
 
     steps:
       - name: Checkout source code
@@ -82,6 +82,10 @@ jobs:
           tags: |
             type=sha,prefix=
             type=raw,value=latest
+
+      - name: Set image tag
+        id: image_tag
+        run: echo "tag=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
